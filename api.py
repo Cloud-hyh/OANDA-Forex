@@ -1,3 +1,4 @@
+#encoding: UTF-8
 import json
 import requests
 
@@ -11,22 +12,31 @@ from threading import Thread, Timer
 class Config(object):
 	"""
 	Json-like config.
+
+	Environments reference		Domain
+    * Real Money              	stream-fxtrade.oanda.com
+    * Practice      			stream-fxpractice.oanda.com
+    * sandbox               	stream-sandbox.oanda.com
+
 	"""
 
 	head = "my token"
 
-	token = '###' + \
-			'###'
+	token = '#####' + \
+			'#####'
 
 	body = {
-		'account_id': '######',
-		'domain': 'stream-fxpractice.oanda.com',
+		'account_id': '#######',
+		'domain': 'stream-sandbox.oanda.com', # sandbox environment
+		'ssl': False,
 		'header': {
 			'Connection' : 'keep-alive',
-			'Authorization' : 'Bearer ' + token
+			'Authorization' : 'Bearer ' + token,
+			'X-Accept-Datetime-Format' : 'unix'
 		}
 	}
-	def __init__(self, head=0, token=0, body=0):
+	
+	def __init__(self, head=0, token=0, body=0, env='sandbox'):
 		""" Reload constructor. """
 		if head:
 			self.head = head
@@ -34,6 +44,14 @@ class Config(object):
 			self.token = token
 		if body:
 			self.body = body
+
+		# environment settings.
+		if env == 'sandbox':
+			self.body['domain'] = 'stream-sandbox.oanda.com'
+			self.body['ssl'] = False
+		elif env == 'practice':
+			self.body['domain'] = 'stream-fxpractice.oanda.com'
+			self.body['ssl'] = True
 
 	def view(self):
 		""" Prettify printing method. """
@@ -76,6 +94,7 @@ class MarketEvent(BaseEvent):
 	"""
 
 	head = 'ETYPE_MKT'
+	is_heartbeat = False
 
 	def __init__(self, data=dict(), is_empty=False):
 
@@ -120,16 +139,20 @@ class EventQueue(object):
 	queue of the system; register functions to speecific events;
 	push events and distribute em to listeners.
 
-	prives
-	------
+	privates
+	--------
 	* _queue: Queue.Queue object; the main event queue.
-	* _timer: threading.Timer object;
 	* _active_flag: boolean; whether active or not.
 	* _thrd: threading.Thread object; event engine thread.
 	* _listeners: dictionary;
 				mapping from event type to handlers' list,
 				shaped like: {'ETYPE_ODR': [<func1>, <func2],
 					   		  'ETYPE_SGNL': [<func_handle_sign>]}
+
+	constructing parameters
+	-----------------------
+	None
+
 	"""
 
 	# event queue and timer instances.
@@ -160,7 +183,7 @@ class EventQueue(object):
 		self._active_flag = True
 		self._thrd.start()
 
-	def close(self):
+	def kill(self):
 		""" suspend engine. """
 		if self._active_flag:
 			self._active_flag = False
@@ -203,20 +226,60 @@ class EventQueue(object):
 
 class StreamMaker(object):
 	"""
-	Generic data source maintainer.
+	Data source maintainer, lower lever wrapper on the top of 
+	event queue.
 
-	parameters
-	----------
+	privates & parameters
+	--------   ----------
 	* config: Config object; specifies user and connection configs.
+	* queue: Event Queue object; container of the events loaded from
+	the stream. 
 
 	"""
 	_config = Config()
+	_event_queue = None
 
-	def __init__(self, config):
+	def __init__(self, config, queue):
 		""" Reload constructor. """
-
+		self._event_queue = queue
 		if config.body:
 			self._config = config
+
+	def open(self, instruments):
+		"""
+
+		"""
+		pass
+
+	def kill(self, instruments):
+		"""
+
+		"""
+		pass
+
+	def _put_mkt_event(self, json_data, view=False):
+		"""
+		wrap the heartbeat into a ETYPE_MKT event, and push it to the queue.
+
+		parameters
+		----------
+		* json_data: dictionary; the heartbeat market scan.
+		* view: boolean; whether to print the event when constructed.
+		mainly for debugging.
+		"""
+		try:
+			if 'heartbeat' in json_data:
+				event = MarketEvent(data=json_data, is_empty=True)
+			else:
+				event = MarketEvent(data=json_data, is_empty=False)
+			if view:
+				event.view()
+			self._event_queue.put(event)
+			return 1
+		except Exception, e:
+			print '[Strem]: Unable to put market event, '+str(e)
+			return -1
+
 
 	def subscribe(self, instruments):
 		"""
@@ -237,6 +300,7 @@ class StreamMaker(object):
 			domain = self._config.body['domain']
 			account_id = self._config.body['account_id']
 			header = self._config.body['header']
+			ssl = self._config.body['ssl']
 			params = {
 				'accountId': account_id,
 				'instruments' : instruments_str
@@ -246,29 +310,70 @@ class StreamMaker(object):
 
 		# GET request.
 		s = requests.session()
-		url = 'https://'+ domain +'/v1/prices'
+
+		if ssl:
+			url = 'https://'+ domain +'/v1/prices'
+		else: 
+			url = 'http://'+ domain +'/v1/prices'
+
 		req = requests.Request('GET', 
 								url = url, 
 								headers = header, 
 								params = params)
 		prepped = s.prepare_request(req) # prepare the request.
-		resp = s.send(prepped, stream=True, verify=False)
+		resp = s.send(prepped, stream=True, verify=True)
 
-		# If success iterate over response.
-		if resp.status_code == 200:
-			for line in resp.iter_lines(1):
+		# If success, iterate over response.
+		if resp.status_code != 200:
+			print '[Strem]: Unexpected response status.'
+			return -1
+		for line in resp.iter_lines(90):
+			if line: # is seems that there are empty lines amid.
 				try:
-					#pass
-					message = json.loads(line)
+					data = json.loads(line)
+					self._put_mkt_event(data)
 				except Exception, e:
 					print '[Stream]: IterLine Error, ' + str(e)
 					pass
-				print line
-		else:
-			print '[Strem]: Unsuccessful Connection.'
-			return -1
-		
 
+
+
+
+
+
+#----------------------------------------------------------------------
+# tests.
+
+def onMktEvent_showLag(event):
+	"""
+	check the lag b/w heartbeat and local handlers.
+	just for test.
+	"""
+	local = time.time() # get unix time stamp.
+	if event.is_heartbeat:
+		web = int(event.body['heartbeat']['time'])
+	else:
+		web = int(event.body['tick']['time'])
+	if web:
+		lag = (web-local*1000000)/1000000.0
+		print web, local, lag
+	event.view()
+	pass
+
+def test_stream():
+
+	q = EventQueue()
+	q.register('ETYPE_MKT', onMktEvent_showLag)
+
+	smaker = StreamMaker(Config(),q)
+	q.open()
+	smaker.subscribe(['EUR_USD','USD_CAD'])
+
+
+if __name__ == '__main__':
+	
+
+	test_stream()
 
 
 
