@@ -1,13 +1,14 @@
 #encoding: UTF-8
 import json
 import requests
+import pymongo
 
 import time
 from datetime import datetime, timedelta
 
-from Queue import Queue, Empty
+from Queue import Queue, Empty, PriorityQueue
 from threading import Thread, Timer
-
+from errors import OANDA_RequestError, OANDA_EnvError
 
 class Config(object):
 	"""
@@ -22,13 +23,17 @@ class Config(object):
 
 	head = "my token"
 
-	token = '#####' + \
-			'#####'
+	token = '4c56cbf8105642050bbfdb36aad29c6a-' + \
+			'77dfc84d1fc6a2ced8e1b15641d0d69e'
 
 	body = {
-		'account_id': '#######',
-		'domain': 'stream-sandbox.oanda.com', # sandbox environment
-		'ssl': False,
+		'username': 'geonaroben',
+		'password': 'DequejHid&',
+		'account_id': 2804581,
+		'domain': 'api-sandbox.oanda.com', # sandbox environment
+		'domain_stream': 'stream-sandbox.oanda.com',
+		'ssl': False, # http or https.
+		'version': 'v1',
 		'header': {
 			'Connection' : 'keep-alive',
 			'Authorization' : 'Bearer ' + token,
@@ -47,10 +52,8 @@ class Config(object):
 
 		# environment settings.
 		if env == 'sandbox':
-			self.body['domain'] = 'stream-sandbox.oanda.com'
 			self.body['ssl'] = False
 		elif env == 'practice':
-			self.body['domain'] = 'stream-fxpractice.oanda.com'
 			self.body['ssl'] = True
 
 	def view(self):
@@ -63,7 +66,6 @@ class Config(object):
 		print json.dumps(config_view, 
 						 indent=4, 
 						 sort_keys=True)
-
 
 #----------------------------------------------------------------------
 # Event containers.
@@ -96,14 +98,10 @@ class MarketEvent(BaseEvent):
 	head = 'ETYPE_MKT'
 	is_heartbeat = False
 
-	def __init__(self, data=dict(), is_empty=False):
+	def __init__(self, data=dict(), is_heartbeat=False):
 
 		self.body = data
-
-		# do something with heartbeat.
-		if is_empty or not data:
-			self.is_heartbeat = True
-			pass
+		self.is_heartbeat = is_heartbeat
 
 
 class SignalEvent(BaseEvent):
@@ -220,14 +218,13 @@ class EventQueue(object):
 			except Empty:
 				pass
 
-
 #----------------------------------------------------------------------
-# Datastream maker class
+# OANDA Api class
 
-class StreamMaker(object):
+class PyApi(object):
 	"""
-	Data source maintainer, lower lever wrapper on the top of 
-	event queue.
+	Data source maintainer, requests maker;
+	a lower lever wrapper on the top of event queue.
 
 	privates & parameters
 	--------   ----------
@@ -239,143 +236,343 @@ class StreamMaker(object):
 	_config = Config()
 	_event_queue = None
 
+	# request stuffs
+	_ssl = False
+	_domain = ''
+	_domain_stream = ''
+	_version = 'v1'
+	_header = dict()
+	_account_id = None
+
+	_session = requests.session()
+
 	def __init__(self, config, queue):
 		""" Reload constructor. """
 		self._event_queue = queue
 		if config.body:
 			self._config = config
+			self._ssl = config.body['ssl']
+			self._domain = config.body['domain']
+			self._domain_stream = config.body['domain_stream']
+			self._version = config.body['version']
+			self._header = config.body['header']
+			self._account_id = config.body['account_id']
 
-	def open(self, instruments):
-		"""
+		# configure protocol
+		if self._ssl:
+			self._domain = 'https://' + self._domain
+			self._domain_stream = 'https://' + self._domain_stream
+		else:
+			self._domain = 'http://' + self._domain
+			self._domain_stream = 'http://' + self._domain_stream
 
+	def _access(self, url, params, method='GET'):
 		"""
-		pass
-
-	def kill(self, instruments):
-		"""
-
-		"""
-		pass
-
-	def _put_mkt_event(self, json_data, view=False):
-		"""
-		wrap the heartbeat into a ETYPE_MKT event, and push it to the queue.
+		request specific data at given url with parameters.
 
 		parameters
 		----------
-		* json_data: dictionary; the heartbeat market scan.
-		* view: boolean; whether to print the event when constructed.
-		mainly for debugging.
+		* url: string.
+		* params: dictionary.
+		* method: string; 'GET' or 'POST', request method.
+
 		"""
 		try:
-			if 'heartbeat' in json_data:
-				event = MarketEvent(data=json_data, is_empty=True)
-			else:
-				event = MarketEvent(data=json_data, is_empty=False)
-			if view:
-				event.view()
-			self._event_queue.put(event)
-			return 1
-		except Exception, e:
-			print '[Strem]: Unable to put market event, '+str(e)
-			return -1
+			assert type(url) == str
+			assert type(params) == dict
+		except AssertionError,e:
+			raise e('[API]: Unvalid url or parameter input.')
+		if not self._session:
+			s = requests.session()
+		else: s = self._session
 
+		# prepare and send the request.
+		try:
+			req = requests.Request(method,
+								   url = url,
+								   headers = self._header,
+								   params = params)
+			prepped = s.prepare_request(req) # prepare the request
+			resp = s.send(prepped, stream=False, verify=True)
+			if method == 'GET':
+				assert resp.status_code == 200
+			elif method == 'POST':
+				assert resp.status_code == 201
+			return resp
+		except AssertionError:
+			msg = '[API]: Bad request, unexpected response status: ' + \
+				  str(resp.status_code)
+			raise OANDA_RequestError(msg)
+		except Exception,e:
+			msg = '[API]: Bad request.' + str(e)
+			raise OANDA_RequestError(msg)
 
-	def subscribe(self, instruments):
+	#----------------------------------------------------------------------
+	# make market data stream.
+
+	def make_stream(self, instruments):
 		"""
-		subscribe market impulses
+		subscribe market impulses and make stream.
 
 		parameters
 		----------
-		* instruments: List of strings; the list of instruments
+		* instruments: string; the ticker(s) of instrument(s), connected by 
+		  coma. Example: 'EUR_USD, USD_CAD'
 		"""
-		if type(instruments) != list:
-			raise TypeError('[Strem]: Instruments must be a list.')
-		if not instruments:
-			raise ValueError('[Strem]: Empty instrument list.')
-		instruments_str = ','.join(instruments)
-
-		# initialize requests parameters from config.
 		try:
-			domain = self._config.body['domain']
-			account_id = self._config.body['account_id']
-			header = self._config.body['header']
-			ssl = self._config.body['ssl']
-			params = {
-				'accountId': account_id,
-				'instruments' : instruments_str
-			}
-		except KeyError, e:
-			raise e('[Strem]: Config file is incomplete.')
-
-		# GET request.
+			assert type(instruments) == str
+		except AssertionError,e:
+			raise e('[API]: Unvalid instruments input.')
+		
 		s = requests.session()
+		url = '{}/{}/prices'.format(self._domain_stream, self._version)
+		params = {
+			'accountId': self._account_id,
+			'instruments': instruments
+		}
 
-		if ssl:
-			url = 'https://'+ domain +'/v1/prices'
-		else: 
-			url = 'http://'+ domain +'/v1/prices'
+		# prepare and send the request.
+		try:
+			req = requests.Request('GET',
+								   url = url,
+								   headers = self._header,
+								   params = params)
+			prepped = s.prepare_request(req) # prepare the request
+			resp = s.send(prepped, stream=True, verify=True)
+			assert resp.status_code == 200
+			print '[API]: Stream established.'
+		except AssertionError:
+			msg = '[API]: Bad request, unexpected response status: ' + \
+				  str(resp.status_code)
+			raise OANDA_RequestError(msg)
+		except Exception,e:
+			msg = '[API]: Bad request.' + str(e)
+			raise OANDA_RequestError(msg)
 
-		req = requests.Request('GET', 
-								url = url, 
-								headers = header, 
-								params = params)
-		prepped = s.prepare_request(req) # prepare the request.
-		resp = s.send(prepped, stream=True, verify=True)
-
-		# If success, iterate over response.
-		if resp.status_code != 200:
-			print '[Strem]: Unexpected response status.'
-			return -1
+		# Iter-lines in resp.
 		for line in resp.iter_lines(90):
-			if line: # is seems that there are empty lines amid.
+			if line:
 				try:
 					data = json.loads(line)
-					self._put_mkt_event(data)
-				except Exception, e:
-					print '[Stream]: IterLine Error, ' + str(e)
+					print data
+				except Exception,e:
+					print '[API]: Stream iterLine Error, ' + str(e)
 					pass
 
+	#----------------------------------------------------------------------
+	# get methods.
 
+	#----------------------------------------------------------------------
+	# Market side
 
+	def get_instruments(self):
+		"""
+		get list of instruments.
+		"""
+		
+		url = '{}/{}/instruments'.format(self._domain, self._version)
+		params = {
+			'accountId': self._account_id
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
 
+	def get_history(self, instrument, granularity, candle_format='bidask',
+				    count=500, daily_alignment=None, 
+				    alignment_timezone=None, weekly_alignment="Monday",
+				    start = None, end = None):
+		"""
+		retrieve historical bar data of certain instrument.
 
+		parameters
+		----------
+		* instrument: string; the ticker of instrument.
 
-#----------------------------------------------------------------------
-# tests.
+		* granularity: string; sample rate of bar data. Examples:
+			- 'S10' 10-seconds bar.
+			- 'M1' 1-minute bar.
+			- 'H3' 3-hours bar.
+			- 'D'/'W'/'M' day/week/month(one).
 
-def onMktEvent_showLag(event):
-	"""
-	check the lag b/w heartbeat and local handlers.
-	just for test.
-	"""
-	local = time.time() # get unix time stamp.
-	if event.is_heartbeat:
-		web = int(event.body['heartbeat']['time'])
-	else:
-		web = int(event.body['tick']['time'])
-	if web:
-		lag = (web-local*1000000)/1000000.0
-		print web, local, lag
-	event.view()
-	pass
+		* candle_format: string; candlestick representation, either:
+			- 'bidask' (default), the Bid/Ask based candlestick.
+			- 'midpoint', the midpoint based candlestick.
+
+		* count: integer; the number of bars to be retrieved, maximum is
+		  5000, should not be specified if both start and end are specified.
+
+		* daily_alignment: integer; the hour of day used to align candles 
+		  with hourly, daily, weekly, or monthly granularity. Note that
+		  The value specified here is interpretted as an hour in the timezone 
+		  set through the alignment_timezone parameter.
+
+		* alignment_timezone: string; timezone used for the dailyAlignment.
+
+		* weekly_alignment: string; the day of the week used to align candles 
+		  with weekly granularity.
+
+		* start, end: string; timestamp for the range of candles requested.
+
+		"""
+		url = '{}/{}/candles'.format(self._domain, self._version)
+		params = {
+			'accountId': self._account_id,
+			'instrument': instrument,
+			'granularity': granularity,
+			'candleFormat': candle_format,
+			'count': count,
+			'dailyAlignment': daily_alignment,
+			'alignmentTimezone': alignment_timezone,
+			'weeklyAlignment': weekly_alignment,
+			'start': start,
+			'end': end
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	def get_prices(self, instruments):
+		"""
+		get a prices glance (not using stream api)
+
+		parameters
+		----------
+		* instruments: string.
+
+		"""
+		url = '{}/{}/prices'.format(self._domain, self._version)
+		params = {
+			'accountId': self._account_id,
+			'instruments': instruments
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	#----------------------------------------------------------------------
+	# Trader side
+
+	def create_sandbox_acc(self):
+		"""
+		Create a sandbox test account.
+
+		"""
+		if self._ssl == False:
+			url = '{}/{}/accounts'.format(self._domain, self._version)
+			try:
+				resp = self._access(url=url, params=dict(), method='POST')
+				assert len(resp.json()) > 0
+				return resp.json()
+			except AssertionError: return 0
+		else:
+			msg = '[API]: create_sandbox_acc() method cannot be invoked ' + \
+				  'within other than sandbox environment.'
+			raise OANDA_EnvError(msg)
+
+	def get_account_info(self, account_id=-1):
+		"""
+		Get infomation of specific account.
+
+		parameters
+		----------
+		* account_id: string or integer; default is -1
+		(use account_id in config)
+		"""
+		if account_id == -1:
+			account_id = self._config.body['account_id']
+
+		url = '{}/{}/accounts/{}'.format(self._domain, 
+				self._version, account_id)
+		try:
+			resp = self._access(url=url, params=dict(), method='GET')
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	def get_positions(self):
+		"""
+		Get a list of all positions.
+		"""
+		url = '{}/{}/accounts/{}/positions'.format(self._domain, 
+			   self._version, self._account_id)
+		params = {
+			'accountId': self._account_id,
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	def get_orders(self, instrument=None, count=50):
+		"""
+		Get all PENDING orders for an account. 
+		Note that pending take-profit or stop-loss orders are recorded
+		in the open trade object.
+
+		parameters
+		----------
+		* instruments: string; default is all.
+		* count: integer; maximum number of open orders to return.
+
+		"""
+		url = '{}/{}/accounts/{}/orders'.format(self._domain, 
+			   self._version, self._account_id)
+		params = {
+			'instrument': instrument,
+			'count': count
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	def get_trades(self, instrument=None, count=50):
+		"""
+		Get list of open trades.
+
+		parameters
+		----------
+		* instruments: string; default is all.
+		* count: integer; maximum number of open orders to return.
+
+		"""
+		url = '{}/{}/accounts/{}/trades'.format(self._domain, 
+			   self._version, self._account_id)
+		params = {
+			'instrument': instrument,
+			'count': count
+		}
+		try:
+			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
 
 def test_stream():
 
 	q = EventQueue()
-	q.register('ETYPE_MKT', onMktEvent_showLag)
 
-	smaker = StreamMaker(Config(),q)
-	q.open()
-	smaker.subscribe(['EUR_USD','USD_CAD'])
-
+	smaker = PyApi(Config(),q)
+	#smaker.make_stream('EUR_USD')
+	doc2 = smaker.get_account_info()
+	print doc2
+	doc3 = smaker.get_positions()
+	print doc3
+	doc4 = smaker.get_orders()
+	print doc4
+	doc5 = smaker.get_trades()
+	print doc5
 
 if __name__ == '__main__':
-	
+    
 
-	test_stream()
-
-
-
-
-		
+    test_stream()
