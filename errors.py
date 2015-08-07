@@ -21,3 +21,14 @@ class OANDA_EnvError(Exception):
 
 	"""
 	pass
+
+class OANDA_DataConstructorError(Exception):
+	"""
+	Data Constructor Error, raised when required data object is not able
+	to be constructed.
+	* tick/bar data object construction error.
+	* ...
+
+
+	"""
+	pass
