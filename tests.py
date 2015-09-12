@@ -17,9 +17,23 @@ def test_config():
 	print cfig.body, cfig.head, cfig.token
 	cfig.view()
 
+def test_info():
+	
+	q1 = EventQueue()
+	q2 = EventQueue()
+	q = {'mkt': q1, 'bar': q2}
+
+	myapi = PyApi(Config(), q)
+	#q1.bind('ETYPE_MKT', myapi.on_market_impulse)
+
+	#q1.open()
+	s = myapi.get_instruments()
+	print s
+
+
 
 
 if __name__ == '__main__':
 	
-	test_events()
+	test_info()
 	#test_config()

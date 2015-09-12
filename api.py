@@ -54,6 +54,7 @@ class Config(object):
 		'ssl': False, # http or https.
 		'version': 'v1',
 		'header': {
+			"Content-Type" : "application/x-www-form-urlencoded",
 			'Connection' : 'keep-alive',
 			'Authorization' : 'Bearer ' + token,
 			'X-Accept-Datetime-Format' : 'unix'
@@ -665,16 +666,24 @@ class PyApi(object):
 
 		# prepare and send the request.
 		try:
-			req = requests.Request(method,
-								   url = url,
-								   headers = self._header,
-								   params = params)
+			if method == 'GET':
+				req = requests.Request(method,
+								   	   url = url,
+								   	   headers = self._header,
+								   	   params = params)
+			elif method == 'POST':
+				req = requests.Request(method,
+								   	   url = url,
+								   	   headers = self._header,
+								   	   data = params)
+				# for POST, params should be included in request body.
 			prepped = s.prepare_request(req) # prepare the request
 			resp = s.send(prepped, stream=False, verify=True)
 			if method == 'GET':
 				assert resp.status_code == 200
-			elif method == 'POST':
-				assert resp.status_code == 201
+			elif method == 'POST': 
+			# note that respcode for POST is still 200!
+				assert resp.status_code == 200
 			return resp
 		except AssertionError:
 			msg = '[API]: Bad request, unexpected response status: ' + \
@@ -977,6 +986,36 @@ class PyApi(object):
 		}
 		try:
 			resp = self._access(url=url, params=params)
+			assert len(resp.json()) > 0
+			return resp.json()
+		except AssertionError: return 0
+
+	def place_order(self, instrument, side, units, price, type):
+		"""
+		place an order through OANDA API.
+
+		parameters
+		----------
+		* instrument: string; the name of instrument.
+		* side: string; 'buy'/'sell'
+		* units: integer; the amount to be traded.
+		* type: string; 
+			- 'market': market order, trade by current market price.
+			- 'limit': limit order, trade when crossing specified price.
+		* price: float; price to excute limit order.
+		"""
+		url = '{}/{}/accounts/{}/orders'.format(self._domain, 
+			   self._version, self._account_id)
+		params = {
+			'instrument': instrument,
+			'side': side,
+			'units': units,
+			'price': price,
+			'type': type,
+			'expiry' : None
+		}
+		try:
+			resp = self._access(url=url, params=params, method='POST')
 			assert len(resp.json()) > 0
 			return resp.json()
 		except AssertionError: return 0
