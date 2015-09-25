@@ -131,6 +131,54 @@ def macd(series, fast, slow):
 	"""
 	pass
 
+def cov(series):
+	"""
+
+	"""
+	pass
+
+def normalize(series):
+	"""
+
+	"""
+	pass
+
+def cumulative_return(series):
+	"""
+
+	"""
+	pass
+
+def aggregate(series):
+	"""
+
+	"""
+	pass
+
+def max_drawdown(series):
+	"""
+
+	"""
+	pass
+
+def sharpe(series):
+	"""
+
+	"""
+	pass
+
+def alpha_beta(series):
+	"""
+
+	"""
+	pass
+
+def bayesian(series):
+	"""
+	
+	"""
+	pass
+
 #----------------------------------------------------------------------
 # Plot.
 
