@@ -106,9 +106,9 @@ def sma(series, window):
 	"""
 	Simple moving average.
 
-	/LaTex
+	/LaTeX
 	SMA_t^{[n]}=\frac{\sum_{i=0}^{n-1} S_{t-i}}\{n}
-	/LaTex
+	/LaTeX
 
 	parameters
 	----------
@@ -175,7 +175,7 @@ def alpha_beta(series):
 
 def bayesian(series):
 	"""
-	
+
 	"""
 	pass
 

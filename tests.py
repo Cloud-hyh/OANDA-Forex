@@ -1,4 +1,6 @@
 from api import *
+from kernel import *
+from utils import *
 
 #----------------------------------------------------------------------
 # Generic tests.
@@ -28,12 +30,81 @@ def test_info():
 
 	#q1.open()
 	s = myapi.get_instruments()
-	print s
+	print json.dumps(s, sort_keys=True, indent=4)
+
+def test_odr():
+	odr1 = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_BUY, 
+		time = datetime(2013,10,10),
+		price =9.82,
+		volume = 100)
+	odr1.view()
+	print odr1.cashflow()
+	return odr1
+
+def test_pos():
+	odr1 = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_BUY, 
+		time = datetime(2013,10,10),
+		price =9.82,
+		volume = 100)
+	pos = Position(odr1,0.0001)
+	pos.view()
+	print pos.calc_opening_value()
+	print pos.calc_opening_cost_rev()
+	print pos.calc_holding_value(2)
+
+	odr2 = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_SHORT, 
+		time = datetime(2013,10,10),
+		price =9.00,
+		volume = 100)
+
+	pos2 = Position(odr2,0.0001)
+	pos2.view()
+	print pos2.calc_opening_value()
+	print pos2.calc_opening_cost_rev()
+	print pos2.calc_holding_value(2)
+
+def test_pos_err():
+	odr3 = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_SELL, 
+		time = datetime(2013,10,10),
+		price =9.00,
+		volume = 100)
+	pos3 = Position(odr3,0.0001)
+
+def test_pos_close():
+	odr = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_BUY, 
+		time = datetime(2013,10,10),
+		price =9.00,
+		volume = 100)
+	print odr.direction
+	
+	pos2 = Position(odr, 0.0001)
+
+	pos2.view()
+	print pos2.calc_opening_value()
+	print pos2.calc_opening_cost_rev()
+	print pos2.calc_holding_value(2)
+
+	odr3 = Order(instrument = 'EUR_USD', 
+		direction = ORDER_TYPE_SELL, 
+		time = datetime(2013,10,11),
+		price =8.00,
+		volume = 100)
+
+	pos2.close(odr3, 0.0001)
+	pos2.view()
+	
 
 
 
 
 if __name__ == '__main__':
-	
-	test_info()
+	#print ORDER_TYPE_SHORT
+	test_pos_close()
+	#test_pos_err()
+	#test_info()
 	#test_config()
