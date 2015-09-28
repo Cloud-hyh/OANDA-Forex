@@ -1,110 +1,113 @@
-from api import *
-from kernel import *
-from utils import *
+from oanda import *
+import numpy as np
+from statics import *
+from kernel import Order, Position, Account
+from datetime import datetime
 
-#----------------------------------------------------------------------
-# Generic tests.
+__author__ = 'zed'
 
-def test_events():
-
-	event = BaseEvent()
-	m_event = MarketEvent(data={'price':1.5})
-	event.view()
-	m_event.view()
-	print m_event, m_event.body, m_event.head
-	print event
 
 def test_config():
-	cfig = Config()
-	print cfig.body, cfig.head, cfig.token
-	cfig.view()
-
-def test_info():
-	
-	q1 = EventQueue()
-	q2 = EventQueue()
-	q = {'mkt': q1, 'bar': q2}
-
-	myapi = PyApi(Config(), q)
-	#q1.bind('ETYPE_MKT', myapi.on_market_impulse)
-
-	#q1.open()
-	s = myapi.get_instruments()
-	print json.dumps(s, sort_keys=True, indent=4)
-
-def test_odr():
-	odr1 = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_BUY, 
-		time = datetime(2013,10,10),
-		price =9.82,
-		volume = 100)
-	odr1.view()
-	print odr1.cashflow()
-	return odr1
-
-def test_pos():
-	odr1 = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_BUY, 
-		time = datetime(2013,10,10),
-		price =9.82,
-		volume = 100)
-	pos = Position(odr1,0.0001)
-	pos.view()
-	print pos.calc_opening_value()
-	print pos.calc_opening_cost_rev()
-	print pos.calc_holding_value(2)
-
-	odr2 = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_SHORT, 
-		time = datetime(2013,10,10),
-		price =9.00,
-		volume = 100)
-
-	pos2 = Position(odr2,0.0001)
-	pos2.view()
-	print pos2.calc_opening_value()
-	print pos2.calc_opening_cost_rev()
-	print pos2.calc_holding_value(2)
-
-def test_pos_err():
-	odr3 = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_SELL, 
-		time = datetime(2013,10,10),
-		price =9.00,
-		volume = 100)
-	pos3 = Position(odr3,0.0001)
-
-def test_pos_close():
-	odr = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_BUY, 
-		time = datetime(2013,10,10),
-		price =9.00,
-		volume = 100)
-	print odr.direction
-	
-	pos2 = Position(odr, 0.0001)
-
-	pos2.view()
-	print pos2.calc_opening_value()
-	print pos2.calc_opening_cost_rev()
-	print pos2.calc_holding_value(2)
-
-	odr3 = Order(instrument = 'EUR_USD', 
-		direction = ORDER_TYPE_SELL, 
-		time = datetime(2013,10,11),
-		price =8.00,
-		volume = 100)
-
-	pos2.close(odr3, 0.0001)
-	pos2.view()
-	
+    c = OANDAPracticeConfig()
+    print c.__class__ == OANDAPracticeConfig
+    api = OANDAClient(config=OANDAPracticeConfig())
+    print api.get_instruments().__class__
+    print api.get_instruments()
 
 
+def test_api():
+    return OANDAClient(config=OANDAPracticeConfig())
 
+
+def test_gets():
+    api = OANDAClient(config=OANDAPracticeConfig())
+    print api.get_account().json()
+
+
+def test_enum():
+    order_type1 = OrderType.buy
+    print order_type1
+    print order_type1.__class__
+    print order_type1 == OrderType.buy
+    print order_type1.__class__ == OrderType
+
+
+def test_order():
+    order1 = Order('EUR_USD', OrderType.buy, datetime(2014, 12, 11), 2.2, 200)
+    order1.view()
+    print order1.cash_flow()
+    print order1.export_price_dict()
+    print order1.export_time_price()
+    print order1.export_to_position()
+    order_sell = Order.close('EUR_USD', OrderType.sell,
+                             datetime(2014, 12, 11), 2.2)
+    order_sell.view()
+    order_partial = Order.close_partial('EUR_USD', OrderType.sell,
+                                        datetime(2014, 12, 11), 2.2, 50, 8008)
+    order_partial.view()
+
+
+def test_positions():
+    order1 = Order('EUR_USD', OrderType.buy, datetime(2014, 12, 11), 2.2, 200)
+    order2 = Order('EUR_USD', OrderType.short, datetime(2014, 12, 11), 2.2, 200)
+    order3 = Order.close('EUR_USD', OrderType.sell, datetime(2014, 12, 15), 2.0)
+    order4 = Order.close('EUR_USD', OrderType.fill, datetime(2014, 12, 13), 1.8)
+    # order1.view()
+    position1 = Position(order1)
+    position1.view(2.4)
+    print position1.open_value()
+    print position1.unrealized_pnl(2.3)
+    print position1.holding_value(2.3)
+
+    position1.close(order3)
+    position1.view()
+    print position1.close_value()
+
+    position2 = Position(order2)
+    position2.view()
+    position2.close(order4)
+    position2.view(2.3)
+
+
+def test_account():
+    acc = Account.usd_std()
+    odr = Order(instrument='EUR_USD',
+                direction=OrderType.short,
+                time=datetime(2015, 9, 1, 0, 0, 0),
+                price=1,
+                volume=100000)
+    acc.handle_mkt_order(odr)
+    acc.view({'EUR_USD': 5})
+
+    odr2 = Order.close(instrument='EUR_USD',
+                       direction=OrderType.fill,
+                       time=datetime(2015, 9, 2, 0, 0, 0),
+                       price=5)
+    acc.handle_mkt_order(odr2)
+    acc.view({'EUR_USD': 5})
+
+    odr3 = Order(instrument='EUR_USD',
+                 direction=OrderType.short,
+                 time=datetime(2015, 9, 3, 0, 0, 0),
+                 price=5,
+                 volume=100000)
+    acc.handle_mkt_order(odr3)
+
+    acc.view({'EUR_USD': 3.5})
+
+
+def test_sma():
+    a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    print a[-8:]
+    print np.mean([x for x in a[-8:]])
 
 if __name__ == '__main__':
-	#print ORDER_TYPE_SHORT
-	test_pos_close()
-	#test_pos_err()
-	#test_info()
-	#test_config()
+    test_sma()
+    # test_order()
+    # test_positions()
+    # test_enum()
+    # test_account()
+
+    # api = test_api()
+    # test_gets()
+    # print api.retrieve_bars('EUR_USD', 'D').json()
